@@ -280,7 +280,9 @@ static int access_checker(request_rec *r)
 
 					if (cfg->system_command != NULL) {
 						snprintf(filename, sizeof(filename), cfg->system_command, r->useragent_ip);
-						system(filename);
+						if (system(filename)!=0) {
+							ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,"Log command failed: '%s'", filename);
+						}
 					}
 
 				} else {
