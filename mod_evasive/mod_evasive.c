@@ -32,6 +32,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <time.h>
 #include <syslog.h>
 #include <errno.h>
+#include <netdb.h>
 
 #include "httpd.h"
 #include "http_core.h"
@@ -124,6 +125,7 @@ typedef struct {
 	char *log_dir;
 	char *system_command;
 	int http_reply;
+	int report_socket;
 } evasive_config;
 
 static const char *whitelist(cmd_parms *cmd, void *dconfig, const char *ip);
@@ -154,6 +156,7 @@ static void * create_dir_conf(apr_pool_t *p, char *context)
 		cfg->log_dir = NULL;
 		cfg->system_command = NULL;
 		cfg->http_reply = DEFAULT_HTTP_REPLY;
+		cfg->report_socket = -1;
 	}
 
 	return cfg;
@@ -360,6 +363,11 @@ static apr_status_t destroy_config(void *dconfig) {
 	if (!cfg) {
 		return APR_SUCCESS;
 	}
+
+	if (cfg->report_socket != -1) {
+		close(cfg->report_socket);
+	}
+
 	free(cfg->email_notify);
 	free(cfg->log_dir);
 	free(cfg->system_command);
@@ -764,6 +772,60 @@ get_http_reply(cmd_parms *cmd, void *dconfig, const char *value) {
     return NULL;
 }
 
+static const char *
+get_report_dest(cmd_parms *cmd, void *dconfig, const char *value) {
+	evasive_config *cfg = (evasive_config *) dconfig;
+	if (value != NULL && value[0] != 0) {
+		if (cfg->report_socket != -1) {
+			close(cfg->report_socket);
+			cfg->report_socket = -1;
+		}
+		char *hostname = strdup(value);
+		char *port     = hostname;
+		strsep(&port, ":");
+
+		struct addrinfo hints;
+		struct addrinfo *result = NULL, *rp = NULL;
+
+		memset(&hints, 0, sizeof(struct addrinfo));
+
+		hints.ai_family = AF_UNSPEC;    /* Allow IPv4 or IPv6 */
+		hints.ai_socktype = SOCK_DGRAM; /* Datagram socket */
+		hints.ai_flags = AI_PASSIVE;    /* For wildcard IP address */
+		hints.ai_protocol = 0;          /* Any protocol */
+		hints.ai_canonname = NULL;
+		hints.ai_addr = NULL;
+		hints.ai_next = NULL;
+
+		int rc = getaddrinfo(hostname, port, &hints, &result);
+		if (rc != 0) {
+			const char *err = gai_strerror(rc);
+			ap_log_error(APLOG_MARK,APLOG_MODULE_INDEX,APLOG_ERR, 0,"Could not resolve host:port '%s': %s", value, err);
+		}
+
+		for (rp = result; rp != NULL; rp = rp->ai_next) {
+			int sfd = socket(rp->ai_family, rp->ai_socktype | SOCK_NONBLOCK, rp->ai_protocol);
+			if (sfd == -1) {
+				ap_log_error(APLOG_MARK,APLOG_MODULE_INDEX,APLOG_DEBUG, 0,"Could not create socket errno=%d", errno);
+				continue;
+			}
+			if (connect(sfd, rp->ai_addr, rp->ai_addrlen) == 0) {
+				cfg->report_socket = sfd;
+				break;
+			}
+			ap_log_error(APLOG_MARK,APLOG_MODULE_INDEX,APLOG_DEBUG, 0,"Could not connect errno=%d", errno);
+			close(sfd);
+		}
+
+		if (cfg->report_socket == -1) {
+			ap_log_error(APLOG_MARK,APLOG_MODULE_INDEX,APLOG_ERR, 0,"Could not connect to host:port '%s'", value);
+		}
+	}
+	ap_log_error(APLOG_MARK,APLOG_MODULE_INDEX,APLOG_ERR, 0,"DOS report destination configuration: %s ",cfg->system_command );
+	return NULL;
+}
+
+
 /* END Configuration Functions */
 
 static const command_rec access_cmds[] =
@@ -809,6 +871,9 @@ static const command_rec access_cmds[] =
 
     AP_INIT_TAKE1("DOSHTTPStatus", get_http_reply, NULL, ACCESS_CONF|RSRC_CONF,
         "HTTP reply code."),
+
+    AP_INIT_TAKE1("DOSReportDest", get_report_dest, NULL, ACCESS_CONF|RSRC_CONF,
+        "Set system command on DoS."),
 
     { NULL }
 };
