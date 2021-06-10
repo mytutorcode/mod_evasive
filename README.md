@@ -353,6 +353,21 @@ on - when limits exceeded request is logged and processed
 off - when limits exceeded configured HTTPStatus is thrown and request processing is blocked.
 Default off.
 
+#### DOSReportDest
+
+**Context**: server config, virtualhost, directory
+
+If set, JSON reports of every accessing IP together with hit counts are sent
+by UDP to this ip:port.
+
+#### DOSIPFromHeader
+
+**Context**: server config, virtualhost, directory
+
+If set, rather than using the IP address of the connection, take the IP
+address from the named header. This is intended for use behind a load
+balancer.
+
 ## TWEAKING APACHE
 
 The keep-alive settings for your children should be reasonable enough to
