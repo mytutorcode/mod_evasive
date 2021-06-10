@@ -190,6 +190,9 @@ static int access_checker(request_rec *r)
 
 		/* Not on hold, check hit stats */
 		} else {
+			int url_count  = 0;
+			int site_count = 0;
+
 			/* Has URI been hit too much? */
       if(cfg->ignore_querystring_enabled){
         const char *hostname;      
@@ -220,6 +223,7 @@ static int access_checker(request_rec *r)
 				/* don't update ts, as 20 requests each 3 sec apart
 				 * becomes equivalent to 20 requests in 3 seconds */
 				n->count++;
+				url_count = n->count;
 			} else {
         ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,"Insert new Page for monitoring PageHits: hashKey:%s",hash_key); 
 				ntt_insert(hit_list, hash_key, t);
@@ -248,9 +252,28 @@ static int access_checker(request_rec *r)
 				/* don't update ts, as 20 requests each 3 seconds apart
 				 * is the same as 20 req in 3 seconds */
 				n->count++;
+				site_count = n->count;
 			} else {
         ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,"Insert new Site for monitoring PageHits: hashKey:%s",hash_key); 
 				ntt_insert(hit_list, hash_key, t);
+			}
+
+			if (cfg->report_socket) {
+				char *msg;
+				if (index(r->useragent_ip, '\'') == NULL && index(r->useragent_ip, '\\') == NULL) {
+					if (asprintf(&msg, "{'url_count':%d,'site_count':%d,'ip':'%s'}", url_count, site_count, r->useragent_ip)) {
+						if (send(cfg->report_socket, msg, strlen(msg), 0)<0) {
+							ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r,"Could not report DOS usage errno=%d\n", errno);
+						}
+						free(msg);
+					}
+					else {
+						ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,"Could not generate JSON errno=%d\n", errno);
+					}
+				}
+				else {
+					ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,"Unexpected characters in IP address");
+				}
 			}
 		}
 
