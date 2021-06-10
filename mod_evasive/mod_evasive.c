@@ -126,6 +126,7 @@ typedef struct {
 	char *system_command;
 	int http_reply;
 	int report_socket;
+	char *ip_from_header;
 } evasive_config;
 
 static const char *whitelist(cmd_parms *cmd, void *dconfig, const char *ip);
@@ -157,6 +158,7 @@ static void * create_dir_conf(apr_pool_t *p, char *context)
 		cfg->system_command = NULL;
 		cfg->http_reply = DEFAULT_HTTP_REPLY;
 		cfg->report_socket = -1;
+		cfg->ip_from_header = NULL;
 	}
 
 	return cfg;
@@ -165,8 +167,16 @@ static void * create_dir_conf(apr_pool_t *p, char *context)
 static int access_checker(request_rec *r)
 {
 	int ret = OK;
+	const char *ip_string = r->useragent_ip;
 
 	evasive_config *cfg = (evasive_config *) ap_get_module_config(r->per_dir_config, &evasive_module);
+
+	if (cfg->ip_from_header) {
+		const char *http_header_ip = apr_table_get(r->headers_in, cfg->ip_from_header);
+		if (http_header_ip) {
+			ip_string = http_header_ip;
+		}
+	}
 
 	/* BEGIN DoS Evasive Maneuvers Code */
 	if (cfg->enabled && r->prev == NULL && r->main == NULL && hit_list != NULL) {
@@ -175,15 +185,15 @@ static int access_checker(request_rec *r)
 		time_t t = time(NULL);
 
 		/* Check whitelist */
-		if (is_whitelisted(r->useragent_ip, cfg)){
-		  ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,"UserAgent: %s is whitelisted, ignored by mod_evasive.",r->useragent_ip); 
+		if (is_whitelisted(ip_string, cfg)){
+		  ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,"UserAgent: %s is whitelisted, ignored by mod_evasive.", ip_string); 
 			return OK;
     }
 		/* First see if the IP itself is on "hold" */
-		n = ntt_find(hit_list, r->useragent_ip);
+		n = ntt_find(hit_list, ip_string);
 
 		if (n != NULL && t-n->timestamp<cfg->blocking_period) {
-      ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,"UserAgent: %s is on hold => wait longer in blocked land.",r->useragent_ip); 
+      ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,"UserAgent: %s is on hold => wait longer in blocked land.", ip_string); 
 			/* If the IP is on "hold", make it wait longer in 403 land */
 			ret = cfg->http_reply;
 			n->timestamp = t;
@@ -197,9 +207,9 @@ static int access_checker(request_rec *r)
       if(cfg->ignore_querystring_enabled){
         const char *hostname;      
         hostname = r->parsed_uri.hostname? r->parsed_uri.hostname:r->server->server_hostname;
-			  snprintf(hash_key, 2048, "%s_%s:%s%s", r->useragent_ip, hostname,r->parsed_uri.port_str,r->parsed_uri.path);
+			  snprintf(hash_key, 2048, "%s_%s:%s%s", ip_string, hostname,r->parsed_uri.port_str,r->parsed_uri.path);
       }else{
-        snprintf(hash_key, 2048, "%s_%s", r->useragent_ip, r->unparsed_uri);
+        snprintf(hash_key, 2048, "%s_%s", ip_string, r->unparsed_uri);
       }
       ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,"Page URI hashKey: %s, originalUri: %s",hash_key,r->unparsed_uri); 
 
@@ -210,7 +220,7 @@ static int access_checker(request_rec *r)
 				if (t-n->timestamp<cfg->page_interval && n->count>=cfg->page_count) {
           ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,"PageHit Limit Exceeded: hashKey:%s, req_interval: %ld < cfg_page_interval:%d, count: %ld >= limit:%d ",hash_key,t-n->timestamp,cfg->page_interval,n->count,cfg->page_count); 
 					ret = cfg->http_reply;
-					ntt_insert(hit_list,  r->useragent_ip, t);
+					ntt_insert(hit_list,  ip_string, t);
 				} else {
 
 					/* Reset our hit count list as necessary */
@@ -230,7 +240,7 @@ static int access_checker(request_rec *r)
 			}
 
 			/* Has site been hit too much? */
-			snprintf(hash_key, 2048, "%s_S", r->useragent_ip);
+			snprintf(hash_key, 2048, "%s_S", ip_string);
       ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,"Site hashKey: %s",hash_key); 
 			n = ntt_find(hit_list, hash_key);
 			if (n != NULL) {
@@ -239,7 +249,7 @@ static int access_checker(request_rec *r)
 				if (t-n->timestamp<cfg->site_interval && n->count>=cfg->site_count) {
           ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,"Site Limit Exceeded: hashKey:%s, req_interval: %ld < cfg_site_interval:%d, count:%ld >= cfg_site_count:%d",hash_key,t-n->timestamp,cfg->site_interval,n->count,cfg->site_count); 
 					ret = cfg->http_reply;
-					ntt_insert(hit_list, r->useragent_ip, t);
+					ntt_insert(hit_list, ip_string, t);
 				} else {
 
 					/* Reset our hit count list as necessary */
@@ -260,8 +270,8 @@ static int access_checker(request_rec *r)
 
 			if (cfg->report_socket) {
 				char *msg;
-				if (index(r->useragent_ip, '\'') == NULL && index(r->useragent_ip, '\\') == NULL) {
-					if (asprintf(&msg, "{'url_count':%d,'site_count':%d,'ip':'%s'}", url_count, site_count, r->useragent_ip)) {
+				if (index(ip_string, '\'') == NULL && index(ip_string, '\\') == NULL) {
+					if (asprintf(&msg, "{'url_count':%d,'site_count':%d,'ip':'%s'}", url_count, site_count, ip_string)) {
 						if (send(cfg->report_socket, msg, strlen(msg), 0)<0) {
 							ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r,"Could not report DOS usage errno=%d\n", errno);
 						}
@@ -285,27 +295,27 @@ static int access_checker(request_rec *r)
 
 			apr_table_setn(r->err_headers_out, "Cache-Control", "no-cache");
 
-			snprintf(filename, sizeof(filename), "%s/dos-%s", cfg->log_dir != NULL ? cfg->log_dir : DEFAULT_LOG_DIR, r->useragent_ip);
+			snprintf(filename, sizeof(filename), "%s/dos-%s", cfg->log_dir != NULL ? cfg->log_dir : DEFAULT_LOG_DIR, ip_string);
 			if (stat(filename, &s)) {
 				file = fopen(filename, "w");
 				if (file != NULL) {
 					fprintf(file, "%d\n", getpid());
 					fclose(file);
 
-					LOG(LOG_ALERT, "Blacklisting address %s: possible DoS attack.", r->useragent_ip);
+					LOG(LOG_ALERT, "Blacklisting address %s: possible DoS attack.", ip_string);
 					if (cfg->email_notify != NULL) {
 						snprintf(filename, sizeof(filename), MAILER, cfg->email_notify);
 						file = popen(filename, "w");
 						if (file != NULL) {
 							fprintf(file, "To: %s\n", cfg->email_notify);
-							fprintf(file, "Subject: HTTP BLACKLIST %s\n\n", r->useragent_ip);
-							fprintf(file, "mod_evasive HTTP Blacklisted %s\n", r->useragent_ip);
+							fprintf(file, "Subject: HTTP BLACKLIST %s\n\n", ip_string);
+							fprintf(file, "mod_evasive HTTP Blacklisted %s\n", ip_string);
 							pclose(file);
 						}
 					}
 
 					if (cfg->system_command != NULL) {
-						snprintf(filename, sizeof(filename), cfg->system_command, r->useragent_ip);
+						snprintf(filename, sizeof(filename), cfg->system_command, ip_string);
 						if (system(filename)!=0) {
 							ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,"Log command failed: '%s'", filename);
 						}
@@ -326,11 +336,11 @@ static int access_checker(request_rec *r)
 
 	if (ret == cfg->http_reply
 		&& (ap_satisfies(r) != SATISFY_ANY || !ap_some_auth_required(r))) {
-			ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,"Client: %s denied by server configuration: %s",r->useragent_ip,r->filename);
+			ap_log_rerror(APLOG_MARK, APLOG_ERR, 0, r,"Client: %s denied by server configuration: %s", ip_string,r->filename);
 	}
 
   if(cfg->silent_enabled){
-    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,"Silent mode enabled by server configuration, possible DOS request from client:%s to page:%s will be ignored(not blocked).",r->useragent_ip,r->filename);
+    ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,"Silent mode enabled by server configuration, possible DOS request from client:%s to page:%s will be ignored(not blocked).", ip_string, r->filename);
     ret = OK;
 	}
 
@@ -796,6 +806,19 @@ get_http_reply(cmd_parms *cmd, void *dconfig, const char *value) {
 }
 
 static const char *
+get_ip_from_header(cmd_parms *cmd, void *dconfig, const char *value) {
+    evasive_config *cfg = (evasive_config *) dconfig;
+    if (value != NULL && value[0] != 0) {
+        if (cfg->ip_from_header != NULL)
+            free(cfg->system_command);
+        cfg->ip_from_header = strdup(value);
+    }
+    ap_log_error(APLOG_MARK,APLOG_MODULE_INDEX,APLOG_INFO, 0,"IP from header configuration: %s ",cfg->ip_from_header);
+    return NULL;
+}
+
+
+static const char *
 get_report_dest(cmd_parms *cmd, void *dconfig, const char *value) {
 	evasive_config *cfg = (evasive_config *) dconfig;
 	if (value != NULL && value[0] != 0) {
@@ -897,6 +920,9 @@ static const command_rec access_cmds[] =
 
     AP_INIT_TAKE1("DOSReportDest", get_report_dest, NULL, ACCESS_CONF|RSRC_CONF,
         "Set system command on DoS."),
+
+    AP_INIT_TAKE1("DOSIPFromHeader", get_ip_from_header, NULL, ACCESS_CONF|RSRC_CONF,
+        "Take IP address from request header."),
 
     { NULL }
 };
