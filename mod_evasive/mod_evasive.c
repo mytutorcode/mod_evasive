@@ -1,6 +1,6 @@
 /*
 mod_evasive for Apache 2
-Copyright (c) by Jonathan A. Zdziarski
+Copyright (c) by Jonathan A. Zdziarski and others
 
 LICENSE
 
