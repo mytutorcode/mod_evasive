@@ -487,6 +487,15 @@ int is_uri_whitelisted(const char *path, evasive_config *cfg) {
 
 static apr_status_t destroy_config(void *dconfig) {
 	evasive_config *cfg = (evasive_config *) dconfig;
+	struct pcre_node *n = cfg->uri_whitelist;
+
+	// Free uri linked list
+	while (n) {
+		struct pcre_node *next = n->next;
+		free(n);
+		n = next;
+	}
+
 	ntt_destroy(hit_list);
 	if (!cfg) {
 		return APR_SUCCESS;
