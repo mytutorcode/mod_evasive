@@ -1016,11 +1016,17 @@ static const command_rec access_cmds[] =
     AP_INIT_TAKE1("DOSSystemCommand", get_system_command, NULL, ACCESS_CONF|RSRC_CONF,
         "Set system command on DoS."),
 
+    AP_INIT_ITERATE("DOSAllowlist", whitelist, NULL, RSRC_CONF,
+        "IP-addresses wildcards to never block."),
+
     AP_INIT_ITERATE("DOSWhitelist", whitelist, NULL, RSRC_CONF,
-        "IP-addresses wildcards to whitelist."),
+        "Synonym for DOSAllowlist."),
+
+    AP_INIT_ITERATE("DOSAllowlistUri", whitelist_uri, NULL, RSRC_CONF,
+            "Files/paths regexes to never block."),
 
     AP_INIT_ITERATE("DOSWhitelistUri", whitelist_uri, NULL, RSRC_CONF,
-            "Files/paths regexes to whitelist"),
+            "Synonym for DOSAllowlistUri."),
 
     AP_INIT_TAKE1("DOSHTTPStatus", get_http_reply, NULL, ACCESS_CONF|RSRC_CONF,
         "HTTP reply code."),
