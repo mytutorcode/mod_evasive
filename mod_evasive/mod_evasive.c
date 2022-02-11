@@ -34,6 +34,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <errno.h>
 #include <netdb.h>
 
+#define PCRE2_CODE_UNIT_WIDTH 8
+#include <pcre2.h>
+
 #include "httpd.h"
 #include "http_core.h"
 #include "http_config.h"
@@ -111,11 +114,17 @@ static struct ntt_node *c_ntt_next(struct ntt *ntt, struct ntt_c *c);
 static struct ntt *hit_list;	// Our dynamic hash table
 static unsigned long hash_table_size = DEFAULT_HASH_TBL_SIZE;
 
+struct pcre_node {
+    pcre2_code *re;
+    struct pcre_node *next;
+};
+
 typedef struct {
 	int enabled;
   int silent_enabled;
   int ignore_querystring_enabled;
 	char *context;
+	struct pcre_node *uri_whitelist;
 	int page_count;
 	int page_interval;
 	int site_count;
@@ -131,6 +140,7 @@ typedef struct {
 
 static const char *whitelist(cmd_parms *cmd, void *dconfig, const char *ip);
 static int is_whitelisted(const char *ip, evasive_config *cfg);
+static int is_uri_whitelisted(const char *uri, evasive_config *cfg);
 
 /* END DoS Evasive Maneuvers Globals */
 static void * create_hit_list()
@@ -149,6 +159,7 @@ static void * create_dir_conf(apr_pool_t *p, char *context)
     cfg->silent_enabled = 0;
     cfg->ignore_querystring_enabled = 1;
 		cfg->context = strdup(context);
+		cfg->uri_whitelist = NULL;
 		cfg->page_count = DEFAULT_PAGE_COUNT;
 		cfg->page_interval = DEFAULT_PAGE_INTERVAL;
 		cfg->site_count = DEFAULT_SITE_COUNT;
@@ -162,6 +173,46 @@ static void * create_dir_conf(apr_pool_t *p, char *context)
 	}
 
 	return cfg;
+}
+
+static const char *whitelist_uri(cmd_parms *cmd, void *dconfig, const char *uri_re)
+{
+    evasive_config *cfg = (evasive_config *) dconfig;
+    struct pcre_node *node;
+
+    node = (struct pcre_node *) malloc(sizeof(struct pcre_node));
+    if (node == NULL) {
+        return NULL;
+    }
+
+    int errornumber;
+    PCRE2_SIZE erroroffset;
+
+    PCRE2_SPTR pattern;
+    pattern = (PCRE2_SPTR) uri_re;
+
+    node->re = pcre2_compile(
+            pattern,               /* the pattern */
+            PCRE2_ZERO_TERMINATED, /* indicates pattern is zero-terminated */
+            0,                     /* default options */
+            &errornumber,          /* for error number */
+            &erroroffset,          /* for error offset */
+            NULL);                 /* use default compile context */
+
+    /* Compilation failed: print the error message and exit. */
+
+    if (node->re == NULL)
+    {
+        PCRE2_UCHAR buffer[256];
+        pcre2_get_error_message(errornumber, buffer, sizeof(buffer));
+        printf("PCRE2 compilation failed at offset %d: %s\n", (int)erroroffset,
+                buffer);
+        return NULL;
+    }
+
+    node->next = cfg->uri_whitelist;
+    cfg->uri_whitelist = node;
+    return NULL;
 }
 
 static int access_checker(request_rec *r)
@@ -202,6 +253,10 @@ static int access_checker(request_rec *r)
 		} else {
 			int url_count  = 0;
 			int site_count = 0;
+			/* Check whitelisted uris */
+				if (is_uri_whitelisted(r->uri, cfg))
+					return OK;
+
 
 			/* Has URI been hit too much? */
       if(cfg->ignore_querystring_enabled){
@@ -388,6 +443,46 @@ static int is_whitelisted(const char *ip, evasive_config *cfg) {
 
 	/* No match */
 	return 0;
+}
+
+int is_uri_whitelisted(const char *path, evasive_config *cfg) {
+
+    int rc;
+    pcre2_match_data *match_data;
+
+    PCRE2_SPTR subject;
+    size_t subject_length;
+
+    subject = (PCRE2_SPTR) path;
+    subject_length = strlen((char *)subject);
+
+    struct pcre_node *node;
+    node = cfg->uri_whitelist;
+
+    while (node != NULL) {
+        match_data = pcre2_match_data_create_from_pattern(node->re, NULL);
+
+        rc = pcre2_match(
+                node->re,             /* the compiled pattern */
+                subject,              /* the subject string */
+                subject_length,       /* the length of the subject */
+                0,                    /* start at offset 0 in the subject */
+                0,                    /* default options */
+                match_data,           /* block for storing the result */
+                NULL);                /* use default match context */
+
+        pcre2_match_data_free(match_data);   /* Release memory used for the match */
+
+        if (rc >= 0) {
+            // match
+            return 1;
+        }
+
+        node = node->next;
+    }
+
+    // no match
+    return 0;
 }
 
 static apr_status_t destroy_config(void *dconfig) {
@@ -914,6 +1009,9 @@ static const command_rec access_cmds[] =
 
     AP_INIT_ITERATE("DOSWhitelist", whitelist, NULL, RSRC_CONF,
         "IP-addresses wildcards to whitelist."),
+
+    AP_INIT_ITERATE("DOSWhitelistUri", whitelist_uri, NULL, RSRC_CONF,
+            "Files/paths regexes to whitelist"),
 
     AP_INIT_TAKE1("DOSHTTPStatus", get_http_reply, NULL, ACCESS_CONF|RSRC_CONF,
         "HTTP reply code."),
