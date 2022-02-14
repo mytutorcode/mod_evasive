@@ -240,6 +240,11 @@ static int access_checker(request_rec *r)
 		  ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r,"UserAgent: %s is whitelisted, ignored by mod_evasive.", ip_string); 
 			return OK;
     }
+
+		/* Check whitelisted uris */
+		if (is_uri_whitelisted(r->uri, cfg))
+			return OK;
+
 		/* First see if the IP itself is on "hold" */
 		n = ntt_find(hit_list, ip_string);
 
@@ -253,10 +258,6 @@ static int access_checker(request_rec *r)
 		} else {
 			int url_count  = 0;
 			int site_count = 0;
-			/* Check whitelisted uris */
-				if (is_uri_whitelisted(r->uri, cfg))
-					return OK;
-
 
 			/* Has URI been hit too much? */
       if(cfg->ignore_querystring_enabled){
