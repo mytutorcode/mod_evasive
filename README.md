@@ -306,7 +306,7 @@ blacklisted IP.
 #### DOSWhiteList
 **Context:** server config
 
-IP addresses of trusted clients can be whitelisted to insure they are never
+IP addresses of trusted clients can be whitelisted to ensure they are never
 denied.  The purpose of whitelisting is to protect software, scripts, local
 searchbots, or other automated tools from being denied for requesting large
 amounts of data from the server.  Whitelisting should *not* be used to add
@@ -367,6 +367,25 @@ by UDP to this ip:port.
 If set, rather than using the IP address of the connection, take the IP
 address from the named header. This is intended for use behind a load
 balancer.
+
+## Whitelisting URI's
+
+Specific URI's can be whitelisted to ensure they are never denied.  Some
+clients may repeatedly request the same URI (due to bugs, or for other
+reasons), and subsequently be blocked from making other (valid) requests.  If
+you want, you may whitelist these URI's so these clients won't be blocked.
+Use with caution.
+
+To whitelist a URI add an entry to the Apache configuration
+in the following fashion:
+
+		DOSWhitelistUri  /path/to/whitelisted/resource
+		DOSWhitelistUri  .*whitelisted.*
+
+`DOSWhitelistUri` supports perl-style regex and matches the whole request URI
+(everything between the domain name and the ?) against this regex.
+
+You can add several entries.
 
 ## TWEAKING APACHE
 
