@@ -1,3 +1,10 @@
+# $${\color{red}Deprecated}$$
+MyTutor forked `mod_evasive` to support IPs from a header when Cloudfront WAF did not respond to DOS attacks fast enough (< 5 minutes).
+Modifications were needed to support usage behind a load balancer.
+This is deprecated and no longer necessary for a few reasons:
+* Upon migrating to Cloudflare, Cloudflare's WAF _should_ be sufficient
+* This library is licensed under GPL-2.0, and we don't want to use such a library.
+
 mod_evasive
 ===========
 This version of mod_evasive is managed by ([keklabs/mod_evasive](https://github.com/keklabs/mod_evasive)): keklabs@google.com.
